@@ -164,7 +164,7 @@ public class TaggerRequestHandler extends RequestHandlerBase {
     try {
       Analyzer analyzer = req.getSchema().getField(indexedField).getType().getQueryAnalyzer();
       try (TokenStream tokenStream = analyzer.tokenStream("", inputReader)) {
-        Terms terms = searcher.getLeafReader().terms(indexedField);
+        Terms terms = searcher.getSlowAtomicReader().terms(indexedField);
         if (terms == null)
           throw new SolrException(SolrException.ErrorCode.BAD_REQUEST,
                   "field " + indexedField + " has no indexed data");
@@ -307,18 +307,21 @@ public class TaggerRequestHandler extends RequestHandlerBase {
    * either. If null is returned, then all docs are available.
    */
   private Bits computeDocCorpus(SolrQueryRequest req) throws SyntaxError, IOException {
-    final String corpusFilterQuery = req.getParams().get("fq");
+    final String[] corpusFilterQueries = req.getParams().getParams("fq");
     final SolrIndexSearcher searcher = req.getSearcher();
     final Bits docBits;
-    if (corpusFilterQuery != null) {
-      QParser qParser = QParser.getParser(corpusFilterQuery, null, req);
-      Query filterQuery;
-      try {
-        filterQuery = qParser.parse();
-      } catch (SyntaxError e) {
-        throw new SolrException(SolrException.ErrorCode.BAD_REQUEST, e);
+    if (corpusFilterQueries != null && corpusFilterQueries.length > 0) {
+      List<Query> filterQueries = new ArrayList<Query>(corpusFilterQueries.length);
+      for (String corpusFilterQuery : corpusFilterQueries) {
+        QParser qParser = QParser.getParser(corpusFilterQuery, null, req);
+        try {
+          filterQueries.add(qParser.parse());
+        } catch (SyntaxError e) {
+          throw new SolrException(SolrException.ErrorCode.BAD_REQUEST, e);
+        }
       }
-      final DocSet docSet = searcher.getDocSet(filterQuery);//hopefully in the cache
+
+      final DocSet docSet = searcher.getDocSet(filterQueries);//hopefully in the cache
       //note: before Solr 4.7 we could call docSet.getBits() but no longer.
       if (docSet instanceof BitDocSet) {
         docBits = ((BitDocSet)docSet).getBits();
@@ -337,7 +340,7 @@ public class TaggerRequestHandler extends RequestHandlerBase {
         };
       }
     } else {
-      docBits = searcher.getLeafReader().getLiveDocs();
+      docBits = searcher.getSlowAtomicReader().getLiveDocs();
     }
     return docBits;
   }
